@@ -6,12 +6,10 @@ import com.grack.nanojson.JsonParser;
 import com.grack.nanojson.JsonParserException;
 
 import org.schabi.newpipe.extractor.NewPipe;
-import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.downloader.Response;
 import org.schabi.newpipe.extractor.exceptions.ParsingException;
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException;
-import org.schabi.newpipe.extractor.services.bilibili.BilibiliService;
 import org.schabi.newpipe.extractor.stream.StreamExtractor;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.utils.Utils;
@@ -86,17 +84,16 @@ public final class SponsorBlockExtractorHelper {
         }
 
         final String apiUrl = getApiUrl(extractor.getServiceId());
-        // bsbsb.top (BiliBili SponsorBlock) rejects unknown query parameters,
-        // while sponsor.ajay.app requires the userAgent one.
+        // sponsor.ajay.app requires the userAgent query parameter.
         final String url = apiUrl + "skipSegments/" + videoIdHash.substring(0, 4)
                 + "?categories=" + categoryParams
                 + "&actionTypes=" + actionParams
-                + (apiUrl.contains("bsbsb.top") ? "" : "&userAgent=Mozilla/5.0");
+                + "&userAgent=Mozilla/5.0";
 
         JsonArray responseArray = null;
 
         try {
-            final String responseBody = NewPipe.getDownloader().get(url, url.contains("bsbsb.top")? BilibiliService.getSponsorBlockHeaders(): null).responseBody();
+            final String responseBody = NewPipe.getDownloader().get(url, null).responseBody();
 
             responseArray = JsonParser.array().from(responseBody);
         } catch (ReCaptchaException | IOException | JsonParserException e) {
@@ -177,10 +174,9 @@ public final class SponsorBlockExtractorHelper {
                 + "&endTime=" + endInSeconds
                 + "&category=" + segment.category.getApiName()
                 + "&userID=" + userId
-                // bsbsb.top (BiliBili SponsorBlock) rejects unknown query parameters
-                + (apiUrl.contains("bsbsb.top") ? "" : "&userAgent=PipePipe/1.1.0")
+                + "&userAgent=AlterTube"
                 + "&actionType=" + actionType;
-        return NewPipe.getDownloader().post(url, apiUrl.contains("bsbsb.top")? BilibiliService.getSponsorBlockHeaders(): null, new byte[0]);
+        return NewPipe.getDownloader().post(url, null, new byte[0]);
     }
 
     public static Response submitSponsorBlockSegmentVote(final String uuid,
@@ -193,7 +189,7 @@ public final class SponsorBlockExtractorHelper {
                 + "&userID=" + userId
                 + "&type=" + vote;
 
-        return NewPipe.getDownloader().post(url, apiUrl.contains("bsbsb.top")? BilibiliService.getSponsorBlockHeaders(): null, new byte[0]);
+        return NewPipe.getDownloader().post(url, null, new byte[0]);
     }
 
     public static String getApiUrl(StreamInfo streamInfo) {
@@ -201,12 +197,7 @@ public final class SponsorBlockExtractorHelper {
     }
 
     public static String getApiUrl(int serviceId) {
-        String apiUrl = "https://sponsor.ajay.app/api/";
-        if (serviceId == ServiceList.YouTube.getServiceId()) {
-            apiUrl = "https://sponsor.ajay.app/api/";
-        } else if (serviceId == ServiceList.BiliBili.getServiceId()) {
-            apiUrl = "https://bsbsb.top/api/";
-        }
-        return apiUrl;
+        // AlterTube is YouTube-only: single SponsorBlock backend.
+        return "https://sponsor.ajay.app/api/";
     }
 }
