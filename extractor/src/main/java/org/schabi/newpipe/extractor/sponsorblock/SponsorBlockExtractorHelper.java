@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
 
 public final class SponsorBlockExtractorHelper {
 
@@ -93,7 +94,7 @@ public final class SponsorBlockExtractorHelper {
         JsonArray responseArray = null;
 
         try {
-            final String responseBody = NewPipe.getDownloader().get(url, null).responseBody();
+            final String responseBody = NewPipe.getDownloader().get(url, Collections.emptyMap()).responseBody();
 
             responseArray = JsonParser.array().from(responseBody);
         } catch (ReCaptchaException | IOException | JsonParserException e) {
