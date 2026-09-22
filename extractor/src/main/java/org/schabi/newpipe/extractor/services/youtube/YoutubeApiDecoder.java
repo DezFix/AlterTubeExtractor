@@ -30,7 +30,7 @@ import java.util.Map;
 public final class YoutubeApiDecoder {
 
     private static final String API_BASE_URL = "https://api.pipepipe.dev/decoder/decode";
-    private static final String USER_AGENT = "PipePipe/4.9.0";
+    private static final String USER_AGENT = "AlterTube/1.0";
 
     @Nonnull
     private static final Map<String, String> DECODE_CACHE = new HashMap<>();

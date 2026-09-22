@@ -478,7 +478,7 @@ public class YoutubeStreamInfoItemExtractor implements StreamInfoItemExtractor {
         } catch (final Exception ignored) {
         }
 
-        // lockupViewModel format - iterate through all metadata like PipePipe
+        // lockupViewModel format - iterate through all metadata
         try {
             final JsonArray metadataRows = videoInfo.getObject("metadata")
                     .getObject("lockupMetadataViewModel")
@@ -593,7 +593,7 @@ public class YoutubeStreamInfoItemExtractor implements StreamInfoItemExtractor {
                 } catch (final Exception ignored) {
                 }
 
-                // lockupViewModel format - iterate through all metadata like PipePipe
+                // lockupViewModel format - iterate through all metadata
                 final JsonArray metadataRows = videoInfo.getObject("metadata")
                         .getObject("lockupMetadataViewModel")
                         .getObject("metadata")

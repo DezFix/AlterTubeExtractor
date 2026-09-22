@@ -41,7 +41,7 @@ public final class YoutubeJavaScriptPlayerManager {
 
     private static final String LATEST_PLAYER_URL =
             "https://api.pipepipe.dev/decoder/latest-player";
-    private static final String USER_AGENT = "PipePipe/4.9.0";
+    private static final String USER_AGENT = "AlterTube/1.0";
     private static final long PLAYER_METADATA_TTL_MILLIS = 24L * 60L * 60L * 1000L;
 
     @Nullable

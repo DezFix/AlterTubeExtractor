@@ -83,7 +83,7 @@ public final class YoutubeSearchSortFilter {
             throw new RuntimeException("Base64 error. This shouldn't happen", e);
         }
         if(Objects.equals(this.searchParameter, "EgA%3D")) {
-            this.searchParameter = "8AEB"; // https://github.com/InfinityLoop1308/PipePipe/issues/302
+            this.searchParameter = "8AEB"; // sort-by-short-video flag, see upstream history
         }
         return this.searchParameter;
     }
