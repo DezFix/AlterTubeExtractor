@@ -12,8 +12,9 @@ import org.schabi.newpipe.extractor.exceptions.ParsingException;
 import org.schabi.newpipe.extractor.localization.DateWrapper;
 import org.schabi.newpipe.extractor.stream.StreamInfoItemExtractor;
 import org.schabi.newpipe.extractor.stream.StreamType;
-import org.schabi.newpipe.extractor.utils.Utils;
 
+import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,11 +26,15 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
             "^(.+), (?:[\\d,.]+(?:[KMB]| million| billion)?|No) views? - play Short$",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Pattern VIDEO_ID_PATTERN = Pattern.compile("[A-Za-z0-9_-]{11}");
+    private static final Pattern NUMBER_PATTERN = Pattern.compile(
+            "[\\d]+(?:[\\s\\u00A0][\\d]+)*(?:[\\.,][\\d]+)?");
+    private static final Pattern COMPACT_MULTIPLIER_PATTERN = Pattern.compile(
+            "([\\d]+(?:[\\.,][\\d]+)?)([KMBkmb])");
 
     private final JsonObject item;
 
     public YoutubeShortsInfoItemExtractor(@Nonnull final JsonObject item) {
-        this.item = item;
+        this.item = Objects.requireNonNull(item, "item");
     }
 
     @Override
@@ -53,11 +58,7 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
                     "title", "content");
         }
         if (isNullOrEmpty(name)) {
-            final Matcher matcher = ACCESSIBILITY_TITLE_PATTERN.matcher(
-                    item.getString("accessibilityText", ""));
-            if (matcher.matches()) {
-                name = matcher.group(1);
-            }
+            name = getNameFromAccessibilityText(item.getString("accessibilityText", ""));
         }
         if (isNullOrEmpty(name)) {
             throw new ParsingException("Could not get name");
@@ -124,7 +125,7 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
 
     @Override
     public long getViewCount() {
-        if (getStreamType() == StreamType.LIVE_STREAM) {
+        if (getStreamType() == StreamType.LIVE_STREAM || requiresMembership()) {
             return -1;
         }
         final String viewCountText = getString(item,
@@ -134,7 +135,8 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
         }
 
         try {
-            return Utils.mixedNumberWordToLong(viewCountText);
+            final Long viewCount = parseViewCountText(viewCountText);
+            return viewCount == null ? -1 : viewCount;
         } catch (final NumberFormatException | ParsingException e) {
             return -1;
         }
@@ -189,13 +191,27 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
     @Override
     public String getUploaderName() {
         final JsonObject uploaderText = getUploaderText();
-        return uploaderText == null ? null : uploaderText.getString("content");
+        if (uploaderText != null) {
+            final String uploaderName = uploaderText.getString("content");
+            if (!isNullOrEmpty(uploaderName)) {
+                return uploaderName;
+            }
+        }
+        return getFirstContributorName(getUploaderNavigationEndpoint());
     }
 
     @Override
     public String getUploaderUrl() throws ParsingException {
         final JsonObject endpoint = getUploaderNavigationEndpoint();
-        return endpoint == null ? "" : getUrlFromNavigationEndpoint(endpoint);
+        if (endpoint == null || endpoint.isEmpty()) {
+            return "";
+        }
+        try {
+            final String uploaderUrl = getUrlFromNavigationEndpoint(endpoint);
+            return isNullOrEmpty(uploaderUrl) ? "" : uploaderUrl;
+        } catch (final Exception ignored) {
+            return "";
+        }
     }
 
     @Nullable
@@ -215,13 +231,78 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
         return true;
     }
 
+    @Override
+    public boolean requiresMembership() {
+        return hasMembershipMarker(item);
+    }
+
+    private static boolean hasMembershipMarker(final JsonObject object) {
+        return hasMembershipMarker(object, 0);
+    }
+
+    private static boolean hasMembershipMarker(final JsonObject object, final int depth) {
+        if (object == null || depth > 12) {
+            return false;
+        }
+        for (final java.util.Map.Entry<String, Object> entry : object.entrySet()) {
+            final String key = entry.getKey();
+            final Object value = entry.getValue();
+            if ((key.equalsIgnoreCase("badgeStyle") || key.equalsIgnoreCase("style"))
+                    && value instanceof String
+                    && isMembershipStyle((String) value)) {
+                return true;
+            }
+            if ((key.equalsIgnoreCase("content") || key.equalsIgnoreCase("text"))
+                    && value instanceof String
+                    && ((String) value).contains("✪")) {
+                return true;
+            }
+            if (value instanceof JsonObject
+                    && hasMembershipMarker((JsonObject) value, depth + 1)) {
+                return true;
+            }
+            if (value instanceof JsonArray
+                    && hasMembershipMarker((JsonArray) value, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasMembershipMarker(final JsonArray array, final int depth) {
+        if (array == null || depth > 12) {
+            return false;
+        }
+        for (final Object value : array) {
+            if (value instanceof JsonObject
+                    && hasMembershipMarker((JsonObject) value, depth + 1)) {
+                return true;
+            }
+            if (value instanceof JsonArray
+                    && hasMembershipMarker((JsonArray) value, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isMembershipStyle(final String value) {
+        final String normalized = value.toUpperCase(Locale.ROOT);
+        return normalized.contains("MEMBERS_ONLY")
+                || normalized.contains("MEMBER_ONLY")
+                || normalized.equals("MEMBERS")
+                || normalized.equals("MEMBER");
+    }
+
     @Nullable
     private JsonObject getUploaderText() {
         final JsonArray rows = getArray(item, "metadata", "lockupMetadataViewModel",
                 "metadata", "contentMetadataViewModel", "metadataRows");
-        if (rows == null) {
+        if (rows == null || rows.isEmpty()) {
             return null;
         }
+
+        JsonObject fallback = null;
         for (final Object rowObject : rows) {
             if (!(rowObject instanceof JsonObject)) {
                 continue;
@@ -234,27 +315,183 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
                 if (!(partObject instanceof JsonObject)) {
                     continue;
                 }
-                final JsonObject text = ((JsonObject) partObject).getObject("text");
+                final JsonObject metadataPart = (JsonObject) partObject;
+                final JsonObject text = metadataPart.getObject("text");
+                if (text == null || text.isEmpty()) {
+                    continue;
+                }
                 final String content = text.getString("content");
-                if (!isNullOrEmpty(content)) {
+                if (isNullOrEmpty(content)) {
+                    continue;
+                }
+                if (hasChannelEndpoint(text)) {
                     return text;
+                }
+                if (isViewCountText(content) || isViewCountPart(metadataPart)
+                        || isUploadDateText(content)) {
+                    continue;
+                }
+                if (fallback == null) {
+                    fallback = text;
+                }
+            }
+        }
+        return fallback;
+    }
+
+    @Nullable
+    private JsonObject getUploaderNavigationEndpoint() {
+        final JsonObject text = getUploaderText();
+        if (text != null) {
+            final JsonArray commandRuns = text.getArray("commandRuns");
+            if (commandRuns != null) {
+                for (final Object commandRunObject : commandRuns) {
+                    if (!(commandRunObject instanceof JsonObject)) {
+                        continue;
+                    }
+                    final JsonObject endpoint = getObject((JsonObject) commandRunObject,
+                            "onTap", "innertubeCommand");
+                    if (endpoint != null && !endpoint.isEmpty()) {
+                        return endpoint;
+                    }
+                }
+            }
+            final JsonObject navigationEndpoint = text.getObject("navigationEndpoint");
+            if (navigationEndpoint != null && !navigationEndpoint.isEmpty()) {
+                return navigationEndpoint;
+            }
+        }
+
+        final JsonObject image = getObject(item, "metadata", "lockupMetadataViewModel", "image");
+        if (image != null && !image.isEmpty()) {
+            final JsonObject decoratedAvatar = image.getObject("decoratedAvatarViewModel");
+            if (decoratedAvatar != null && !decoratedAvatar.isEmpty()) {
+                final JsonObject endpoint = getObject(decoratedAvatar,
+                        "rendererContext", "commandContext", "onTap", "innertubeCommand");
+                if (endpoint != null && !endpoint.isEmpty()) {
+                    return endpoint;
+                }
+            }
+            final JsonObject avatarStack = image.getObject("avatarStackViewModel");
+            if (avatarStack != null && !avatarStack.isEmpty()) {
+                final JsonObject endpoint = getObject(avatarStack,
+                        "rendererContext", "commandContext", "onTap", "innertubeCommand");
+                if (endpoint != null && !endpoint.isEmpty()) {
+                    return endpoint;
                 }
             }
         }
         return null;
     }
 
-    @Nullable
-    private JsonObject getUploaderNavigationEndpoint() {
-        final JsonObject text = getUploaderText();
-        if (text == null) {
+    private String getFirstContributorName(final JsonObject endpoint) {
+        if (endpoint == null || !endpoint.has("showDialogCommand")) {
             return null;
+        }
+        try {
+            final JsonArray listItems = endpoint.getObject("showDialogCommand")
+                    .getObject("panelLoadingStrategy").getObject("inlineContent")
+                    .getObject("dialogViewModel").getObject("customContent")
+                    .getObject("listViewModel").getArray("listItems");
+            if (listItems == null || listItems.isEmpty()) {
+                return null;
+            }
+            return listItems.getObject(0).getObject("listItemViewModel")
+                    .getObject("title").getString("content", "");
+        } catch (final Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean hasChannelEndpoint(final JsonObject text) {
+        if (text == null || text.isEmpty()) {
+            return false;
         }
         final JsonArray commandRuns = text.getArray("commandRuns");
-        if (commandRuns == null || commandRuns.isEmpty()) {
+        if (commandRuns != null) {
+            for (final Object commandRunObject : commandRuns) {
+                if (!(commandRunObject instanceof JsonObject)) {
+                    continue;
+                }
+                final JsonObject endpoint = getObject((JsonObject) commandRunObject,
+                        "onTap", "innertubeCommand");
+                if (endpoint != null && !endpoint.isEmpty()) {
+                    return true;
+                }
+            }
+        }
+        final JsonObject navigationEndpoint = text.getObject("navigationEndpoint");
+        return navigationEndpoint != null && !navigationEndpoint.isEmpty();
+    }
+
+    private static boolean isViewCountText(final String text) {
+        if (isNullOrEmpty(text)) {
+            return false;
+        }
+        final String lowerCaseText = text.toLowerCase(Locale.ROOT);
+        return lowerCaseText.matches(".*\\bviews?\\b.*")
+                || lowerCaseText.contains("ukubukwa")
+                || lowerCaseText.contains("no views")
+                || lowerCaseText.contains("akukho")
+                || lowerCaseText.contains("просмотр")
+                || lowerCaseText.contains("перегляд")
+                || lowerCaseText.contains("visualiz")
+                || lowerCaseText.contains("vues")
+                || lowerCaseText.contains("aufr")
+                || lowerCaseText.contains("观看")
+                || lowerCaseText.contains("再生");
+    }
+
+    private static boolean isViewCountPart(final JsonObject metadataPart) {
+        if (isViewCountText(metadataPart.getString("accessibilityLabel"))) {
+            return true;
+        }
+        final JsonObject leadingIcon = metadataPart.getObject("leadingIcon");
+        return !leadingIcon.isEmpty()
+                && "PLAY_ARROW_OUTLINED".equals(leadingIcon.getString("name"));
+    }
+
+    private static boolean isUploadDateText(final String text) {
+        if (isNullOrEmpty(text)) {
+            return false;
+        }
+        final String lowerCaseText = text.toLowerCase(Locale.ROOT);
+        return lowerCaseText.matches(".*\\b(ago|yesterday|today|watched|streamed)\\b.*")
+                || lowerCaseText.matches(".*\\b\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}\\b.*");
+    }
+
+    @Nullable
+    private static String getNameFromAccessibilityText(final String text) {
+        if (isNullOrEmpty(text)) {
             return null;
         }
-        return commandRuns.getObject(0).getObject("onTap").getObject("innertubeCommand");
+        final Matcher matcher = ACCESSIBILITY_TITLE_PATTERN.matcher(text);
+        if (matcher.matches()) {
+            return matcher.group(1);
+        }
+
+        final int separator = text.lastIndexOf(',');
+        if (separator <= 0) {
+            return null;
+        }
+        final String suffix = text.substring(separator + 1).trim();
+        final String lowerCaseSuffix = suffix.toLowerCase(Locale.ROOT);
+        final boolean hasNumber = suffix.matches(".*\\d.*");
+        final boolean hasViewLabel = lowerCaseSuffix.contains("view")
+                || lowerCaseSuffix.contains("перегляд")
+                || lowerCaseSuffix.contains("просмотр")
+                || lowerCaseSuffix.contains("visualiz")
+                || lowerCaseSuffix.contains("vues")
+                || lowerCaseSuffix.contains("aufr")
+                || lowerCaseSuffix.contains("观看")
+                || lowerCaseSuffix.contains("再生");
+        final boolean hasCompactMultiplier = lowerCaseSuffix.matches(
+                ".*\\d[\\d\\s.,]*[kmb](?:\\s|$).*");
+        if (!hasNumber || (!hasViewLabel && !hasCompactMultiplier)) {
+            return null;
+        }
+        final String name = text.substring(0, separator).trim();
+        return isNullOrEmpty(name) ? null : name;
     }
 
     @Nullable
@@ -309,6 +546,100 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
     }
 
     @Nullable
+    private static Long parseViewCountText(@Nonnull final String text)
+            throws ParsingException {
+        final String lowerCaseText = text.toLowerCase(Locale.ROOT);
+        if (lowerCaseText.contains("no views")
+                || lowerCaseText.contains("akukho ukubukwa")
+                || lowerCaseText.contains("akukho kubukwa")) {
+            return 0L;
+        }
+
+        final Matcher compactMatcher = COMPACT_MULTIPLIER_PATTERN.matcher(text);
+        if (compactMatcher.find()) {
+            final long multiplier = getCompactMultiplier(compactMatcher.group(2).charAt(0));
+            return scale(parseNumber(compactMatcher.group(1)), multiplier);
+        }
+
+        final long textualMultiplier = getTextualMultiplier(lowerCaseText);
+        if (textualMultiplier > 1) {
+            final String normalizedText = text.replaceAll(
+                    "(?<=\\d)[\\s\\u00A0]+(?=\\d)", "");
+            final Matcher numberMatcher = NUMBER_PATTERN.matcher(normalizedText);
+            if (numberMatcher.find()) {
+                return scale(parseNumber(numberMatcher.group()), textualMultiplier);
+            }
+        }
+
+        if (!isViewCountText(text)) {
+            return null;
+        }
+        final Matcher numberMatcher = NUMBER_PATTERN.matcher(text);
+        if (numberMatcher.find()) {
+            return scale(parseNumber(numberMatcher.group()), 1L);
+        }
+        return null;
+    }
+
+    private static long getCompactMultiplier(final char suffix) {
+        switch (Character.toUpperCase(suffix)) {
+            case 'K':
+                return 1_000L;
+            case 'M':
+                return 1_000_000L;
+            case 'B':
+                return 1_000_000_000L;
+            default:
+                return 1L;
+        }
+    }
+
+    private static long getTextualMultiplier(final String text) {
+        if (text.contains("billion") || text.contains("milliard")
+                || text.contains("млрд") || text.contains("мільярд")) {
+            return 1_000_000_000L;
+        }
+        if (text.contains("million") || text.contains("milion")
+                || text.contains("millon") || text.contains("млн")
+                || text.contains("миллион") || text.contains("мільйон")) {
+            return 1_000_000L;
+        }
+        if (text.contains("thousand") || text.contains("тыс")
+                || text.contains("тис")) {
+            return 1_000L;
+        }
+        return 1L;
+    }
+
+    private static long scale(final double value, final long multiplier) {
+        return (long) (value * multiplier);
+    }
+
+    private static double parseNumber(final String value) {
+        final String normalized = value.replace(" ", "").replace("\u00A0", "");
+        final int commaIndex = normalized.lastIndexOf(',');
+        final int dotIndex = normalized.lastIndexOf('.');
+        if (commaIndex >= 0 && dotIndex >= 0) {
+            final int decimalIndex = Math.max(commaIndex, dotIndex);
+            final String integerPart = normalized.substring(0, decimalIndex)
+                    .replace(",", "").replace(".", "");
+            final String fractionPart = normalized.substring(decimalIndex + 1)
+                    .replace(",", "").replace(".", "");
+            return Double.parseDouble(integerPart + "." + fractionPart);
+        }
+        if (commaIndex >= 0) {
+            if (normalized.length() - commaIndex - 1 == 3) {
+                return Double.parseDouble(normalized.replace(",", ""));
+            }
+            return Double.parseDouble(normalized.replace(',', '.'));
+        }
+        if (dotIndex >= 0 && normalized.length() - dotIndex - 1 == 3) {
+            return Double.parseDouble(normalized.replace(".", ""));
+        }
+        return Double.parseDouble(normalized);
+    }
+
+    @Nullable
     private static String getThumbnailUrl(@Nullable final JsonArray sources) {
         if (sources == null) {
             return null;
@@ -342,7 +673,7 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
     @Nullable
     private static String getString(@Nonnull final JsonObject object,
                                     @Nonnull final String... path) {
-        if (path.length == 0) {
+        if (object == null || path.length == 0) {
             return null;
         }
 
@@ -363,7 +694,7 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
     @Nullable
     private static JsonObject getObject(@Nonnull final JsonObject object,
                                        @Nonnull final String... path) {
-        if (path.length == 0) {
+        if (object == null || path.length == 0) {
             return null;
         }
 
@@ -384,7 +715,7 @@ public class YoutubeShortsInfoItemExtractor implements StreamInfoItemExtractor {
     @Nullable
     private static JsonArray getArray(@Nonnull final JsonObject object,
                                       @Nonnull final String... path) {
-        if (path.length == 0) {
+        if (object == null || path.length == 0) {
             return null;
         }
 

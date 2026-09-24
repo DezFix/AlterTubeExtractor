@@ -17,6 +17,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -49,6 +50,9 @@ public class YoutubeSubscriptionExtractor extends SubscriptionExtractor {
     public List<SubscriptionItem> fromInputStream(@Nonnull final InputStream contentInputStream,
                                                   @Nonnull final String contentType)
             throws ExtractionException {
+        if (contentType == null) {
+            throw new InvalidSourceException("Content type is null");
+        }
         switch (contentType) {
             case "json":
             case "application/json":
@@ -83,7 +87,12 @@ public class YoutubeSubscriptionExtractor extends SubscriptionExtractor {
             }
 
             final JsonObject subscription = ((JsonObject) subscriptionObject).getObject("snippet");
-            final String id = subscription.getObject("resourceId").getString("channelId", "");
+            if (subscription == null || subscription.isEmpty()) {
+                foundInvalidSubscription = true;
+                continue;
+            }
+            final JsonObject resourceId = subscription.getObject("resourceId");
+            final String id = resourceId == null ? "" : resourceId.getString("channelId", "");
             if (id.length() != 24) { // e.g. UCsXVk37bltHxD1rDPwtNM8Q
                 foundInvalidSubscription = true;
                 continue;
@@ -104,7 +113,8 @@ public class YoutubeSubscriptionExtractor extends SubscriptionExtractor {
         try (ZipInputStream zipInputStream = new ZipInputStream(contentInputStream)) {
             ZipEntry zipEntry;
             while ((zipEntry = zipInputStream.getNextEntry()) != null) {
-                if (zipEntry.getName().toLowerCase().endsWith(".csv")) {
+                final String entryName = zipEntry.getName();
+                if (entryName != null && entryName.toLowerCase(Locale.ROOT).endsWith(".csv")) {
                     try {
                         final List<SubscriptionItem> csvItems = fromCsvInputStream(zipInputStream);
 
@@ -142,7 +152,8 @@ public class YoutubeSubscriptionExtractor extends SubscriptionExtractor {
         int currentLine = 0;
         String line = "";
 
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(contentInputStream))) {
+        final BufferedReader br = new BufferedReader(new InputStreamReader(contentInputStream));
+        try {
             final List<SubscriptionItem> subscriptionItems = new ArrayList<>();
 
             // ignore header and skip first line
