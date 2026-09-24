@@ -14,6 +14,8 @@ import java.io.File;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -32,6 +34,25 @@ public final class YoutubeSabrRequestHelper {
     private YoutubeSabrRequestHelper() {
     }
 
+    private static boolean isAllowedGoogleVideoUrl(final String value) {
+        if (value == null) {
+            return false;
+        }
+        try {
+            final URI uri = URI.create(value);
+            final String host = uri.getHost();
+            if (host == null) {
+                return false;
+            }
+            final String normalized = host.toLowerCase(Locale.ROOT);
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && (normalized.equals("googlevideo.com")
+                    || normalized.endsWith(".googlevideo.com"));
+        } catch (final IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
     @Nonnull
     public static byte[] fetchInitializationData(
             @Nonnull final YoutubeSabrInfo.Format format,
@@ -40,7 +61,7 @@ public final class YoutubeSabrRequestHelper {
         final String initializationUrl = format.getInitializationUrl();
         final long start = format.getInitRangeStart();
         final long end = format.getInitRangeEnd();
-        if (initializationUrl == null || initializationUrl.isEmpty() || start < 0 || end < start
+        if (!isAllowedGoogleVideoUrl(initializationUrl) || start < 0 || end < start
                 || end - start >= MAX_INITIALIZATION_BYTES) {
             throw new IOException("Invalid SABR initialization range: itag="
                     + format.getItag() + ", start=" + start + ", end=" + end);
@@ -82,6 +103,9 @@ public final class YoutubeSabrRequestHelper {
                                             .SegmentConsumer segmentStartConsumer,
                                     @Nullable final File segmentSpoolDirectory)
             throws IOException, ExtractionException {
+        if (!isAllowedGoogleVideoUrl(serverAbrStreamingUrl)) {
+            throw new IOException("Untrusted SABR streaming URL");
+        }
         final byte[] requestBody = buildMediaRequest(info, request, session, requestNumber > 0);
         final long requestStartNs = System.nanoTime();
         final long[] firstSegmentElapsedMs = {-1};
